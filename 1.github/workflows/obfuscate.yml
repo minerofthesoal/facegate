@@ -1,0 +1,47 @@
+name: Obfuscate (scheduled)
+
+# Twice a day: 00:00 and 12:00 UTC. Also runnable on demand.
+on:
+  schedule:
+    - cron: "0 0,12 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  obfuscate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate obfuscated build (fresh random key per file this run)
+        run: python3 scripts/obfuscate.py
+
+      - name: Publish to obfuscated-build branch
+        run: |
+          set -e
+          git config user.name "facegate-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          # Stage exactly what we want to publish outside the checkout first,
+          # so we can safely wipe the working tree without losing it.
+          rm -rf /tmp/publish
+          mkdir -p /tmp/publish/facegate
+          cp -r facegate_obfuscated/. /tmp/publish/facegate/
+          cp install.sh pyproject.toml PKGBUILD requirements.txt README.md /tmp/publish/ 2>/dev/null || true
+
+          # Fresh orphan branch each run -- this is a generated artifact, not
+          # real history, so we don't want years of noisy commits piling up.
+          git checkout --orphan obfuscated-build-tmp
+          git rm -rf . > /dev/null
+          cp -r /tmp/publish/. .
+          git add -A
+          git commit -m "Obfuscated build $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git branch -D obfuscated-build 2>/dev/null || true
+          git branch -m obfuscated-build
+          git push origin obfuscated-build --force

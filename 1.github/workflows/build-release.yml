@@ -1,0 +1,93 @@
+name: Build & Release
+
+# Manually triggered so YOU control the version number, not an auto-bump.
+# Run from the Actions tab (or `gh workflow run build-release.yml -f version=1.2.0`).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build and release (e.g. 1.2.0 -- no leading 'v')"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Stamp version ${{ inputs.version }}
+        run: |
+          sed -i "s/^version = .*/version = \"${{ inputs.version }}\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"${{ inputs.version }}\"/" facegate/__init__.py
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: dist/*
+
+  build-pacman:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      # base-devel image is minimal beyond the build toolchain itself --
+      # git/python/sudo aren't guaranteed present, so install explicitly.
+      - name: Install build dependencies
+        run: |
+          pacman -Sy --noconfirm git sudo python python-build python-installer \
+            python-wheel python-setuptools
+
+      - uses: actions/checkout@v4
+
+      - name: Stamp version ${{ inputs.version }}
+        run: |
+          sed -i "s/^version = .*/version = \"${{ inputs.version }}\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"${{ inputs.version }}\"/" facegate/__init__.py
+          sed -i "s/^pkgver=.*/pkgver=${{ inputs.version }}/" PKGBUILD
+
+      - name: makepkg refuses to run as root -- build as an unprivileged user
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+
+      - name: Build pacman package
+        run: sudo -u builder makepkg -f --noconfirm --nodeps
+        # --nodeps: runtime deps (opencv, v4l-utils, ...) declared in PKGBUILD
+        # aren't installed in this minimal container -- we're only packaging
+        # here, not test-running FaceGate itself.
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pacman-package
+          path: "*.pkg.tar.zst"
+
+  release:
+    needs: [build-python, build-pacman]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub release v${{ inputs.version }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: FaceGate v${{ inputs.version }}
+          generate_release_notes: true
+          files: |
+            artifacts/python-package/*
+            artifacts/pacman-package/*
