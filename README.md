@@ -39,6 +39,8 @@ line in the stack" (i.e. your normal password prompt).
 
 
 ## Install
+curl -fsSL https://raw.githubusercontent.com/minerofthesoal/facegate/main/get.sh | bash
+or
 
 ```bash
 git clone <this repo, or just unzip the files>
