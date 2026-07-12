@@ -1,5 +1,4 @@
-cd ~/facegate
-cat > PKGBUILD << 'EOF'
+
 # Maintainer: Ray0rf1re
 # Built directly from the checked-out repo tree (no source= tarball) --
 # this PKGBUILD is for CI (build-release.yml), which already has the
@@ -28,6 +27,3 @@ package() {
   python -m installer --destdir="$pkgdir" "$srcdir"/dist/*.whl
 }
 EOF
-git add PKGBUILD
-git commit -m "revert PKGBUILD to build-from-checkout for CI; AUR keeps its own git+https version"
-git push
