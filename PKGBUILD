@@ -1,4 +1,10 @@
+cd ~/facegate
+cat > PKGBUILD << 'EOF'
 # Maintainer: Ray0rf1re
+# Built directly from the checked-out repo tree (no source= tarball) --
+# this PKGBUILD is for CI (build-release.yml), which already has the
+# tagged commit checked out. The AUR submission uses a *different*
+# PKGBUILD (git+https source) that lives only in the aur-facegate repo.
 pkgname=facegate
 pkgver=0.2.0
 pkgrel=1
@@ -7,17 +13,21 @@ arch=('any')
 url="https://github.com/minerofthesoal/facegate"
 license=('MIT')
 depends=('python' 'python-numpy' 'opencv' 'python-pam' 'v4l-utils')
-makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools' 'git')
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
 options=('!strip' '!debug')
-source=("git+https://github.com/minerofthesoal/facegate.git#tag=v$pkgver")
-sha256sums=('SKIP')
+source=()
+sha256sums=()
 
 build() {
-  cd "$srcdir/$pkgname"
+  cd "$startdir"
   python -m build --wheel --no-isolation --outdir "$srcdir/dist"
 }
 
 package() {
-  cd "$srcdir/$pkgname"
+  cd "$startdir"
   python -m installer --destdir="$pkgdir" "$srcdir"/dist/*.whl
 }
+EOF
+git add PKGBUILD
+git commit -m "revert PKGBUILD to build-from-checkout for CI; AUR keeps its own git+https version"
+git push
