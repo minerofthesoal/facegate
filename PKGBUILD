@@ -26,4 +26,3 @@ package() {
   cd "$startdir"
   python -m installer --destdir="$pkgdir" "$srcdir"/dist/*.whl
 }
-EOF
