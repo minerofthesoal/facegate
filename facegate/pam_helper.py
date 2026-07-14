@@ -6,7 +6,7 @@ Exit code != 0 -> tell PAM to fall through to the next stack entry
 
 pam_exec sets PAM_USER (account being authenticated) and PAM_SERVICE
 (which PAM service triggered this -- "sudo", "login", "kde",
-"kscreenlocker-greet", "sddm", etc.) in the environment; we use both.
+"kde-fingerprint", "sddm", etc.) in the environment; we use both.
 
 Every attempt is logged to syslog (facility LOG_AUTH, ident "facegate")
 AND to /var/log/facegate/facegate.log (see logging_setup.py, new in
@@ -28,7 +28,7 @@ from .logging_setup import get_logger
 # now, as opposed to a sudo prompt in a terminal they're already sitting
 # at. Used to pick the shorter recognition.timeout_seconds_greeter budget
 # instead of the sudo-context timeout_seconds. New in v0.2.0.
-GREETER_SERVICES = {"sddm", "sddm-greeter", "kde", "kde-np", "kscreenlocker-greet"}
+GREETER_SERVICES = {"sddm", "sddm-greeter", "kde", "kde-np", "kde-fingerprint"}
 
 CAMERA_LOCK_FILE = "/run/facegate/camera.lock"
 

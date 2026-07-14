@@ -48,7 +48,33 @@ chmod 755 /usr/bin/facegate-auth
 
 echo "== Creating log directory =="
 mkdir -p /var/log/facegate
-chmod 750 /var/log/facegate
+chmod 1777 /var/log/facegate
+
+echo "== Checking camera device group access =="
+# /dev/video* are typically root:video 0660. facegate-auth runs as root
+# under sudo (fine either way), but as your actual logged-in user under
+# kscreenlocker/some greeters -- if that user isn't in the "video" group,
+# it can wire up PAM perfectly and still never be able to open the camera
+# at all. Fixing this needs a fresh login session to take effect for any
+# already-running desktop session (group membership is set at login time
+# and doesn't refresh for a running session), so it's flagged clearly
+# rather than silently assumed to have worked immediately.
+TARGET_USER="${SUDO_USER:-}"
+if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
+  if ! id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx video; then
+    usermod -aG video "$TARGET_USER"
+    echo "Added $TARGET_USER to the 'video' group (needed for camera access from"
+    echo "non-root PAM contexts like the KDE lock screen). This only takes effect"
+    echo "after you log out and back in (or reboot) -- it will NOT apply to your"
+    echo "current session."
+  else
+    echo "$TARGET_USER is already in the 'video' group."
+  fi
+else
+  echo "Could not determine the invoking user (\$SUDO_USER unset) -- skipping."
+  echo "If lock-screen face checks fail to even open the camera, run:"
+  echo "  sudo usermod -aG video <your-username>   # then log out and back in"
+fi
 
 echo ""
 echo "Install complete (facegate $(python3 -c "import sys; sys.path.insert(0,'/usr/lib/facegate'); from facegate import __version__; print(__version__)"))."

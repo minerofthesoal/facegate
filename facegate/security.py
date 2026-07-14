@@ -89,10 +89,9 @@ def hash_pin(pin, salt_hex=None):
 
 def set_pin(pin):
     digest, salt = hash_pin(pin)
-    cfg = config.load()
-    cfg["pin_hash"] = digest
-    cfg["pin_salt"] = salt
-    config.save(cfg)
+    # v0.2.2: PIN lives in its own strictly root-only file now, not in the
+    # (now world-readable) main config.json -- see config.save_pin().
+    config.save_pin(digest, salt)
 
 
 def verify_pin(pin):

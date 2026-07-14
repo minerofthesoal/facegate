@@ -175,3 +175,31 @@ def auto_detect():
     ir = next((r for r in results if r["is_ir"]), None)
     return rgb, ir, results
 
+
+def probe_candidates(exclude_paths=()):
+    """Probe every detected Logitech device except the given paths.
+
+    Used by `facegate camera add` to offer a second (or third...) camera
+    beyond the primary rgb/ir pair -- e.g. a C930c with no IR sensor used
+    purely as an additional independent RGB check. Returns a list of the
+    same info dicts as auto_detect()'s `all_probed_devices`, each also
+    carrying its raw v4l2-ctl description under "description". New in
+    v0.2.1.
+    """
+    devs = list_video_devices()
+    candidates = [p for p in find_brio_devices() if p not in exclude_paths]
+    results = []
+    for path in candidates:
+        info = probe_device(path)
+        if not info:
+            continue
+        known = classify_known_device(devs.get(path))
+        if known is not None:
+            info["is_ir"] = known
+            info["classified_by"] = "known_device_table"
+        else:
+            info["classified_by"] = "saturation_probe"
+        info["description"] = devs.get(path)
+        results.append(info)
+    return results
+

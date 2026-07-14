@@ -7,7 +7,7 @@ import shutil
 import sys
 import time
 
-from . import __version__, camera, config, recognizer, security
+from . import __version__, camera, config, hf_upload, recognizer, security
 
 PAM_MARKER = "facegate-auth"
 PAM_LINE = f"auth    sufficient   pam_exec.so quiet /usr/bin/{PAM_MARKER}\n"
@@ -20,19 +20,58 @@ PAM_LINE = f"auth    sufficient   pam_exec.so quiet /usr/bin/{PAM_MARKER}\n"
 # vendor copy exists we seed /etc/pam.d/<service> from it first.
 #
 # v0.2.0: added sddm (the login-manager screen you hit right after a
-# restart) and kscreenlocker-greet (the PAM service name Plasma's lock
-# screen uses on some distros/versions, alongside the older "kde" name --
-# both are wired since which one is actually in play varies, and wiring
-# a service whose file doesn't exist on your system is a safe no-op).
+# restart) alongside the existing "kde" (Plasma's kscreenlocker password
+# stack). v0.2.1: removed a "kscreenlocker-greet" entry that turned out
+# not to be a real PAM service name on current Plasma -- "kde" is the
+# correct/only one confirmed by KDE's own docs. Note that both "kde" and
+# "sddm" are password stacks: PAM only evaluates them once a credential
+# is actually submitted (Enter, even on an empty field), not proactively
+# the instant the screen appears -- see SUBMIT_REQUIRED_TARGETS and
+# EXPERIMENTAL_PAM_TARGETS below for the one avenue that can be proactive.
 PAM_TARGETS = {
     "/etc/pam.d/sudo": None,
     "/etc/pam.d/login": None,
-    "/etc/pam.d/kde": "/usr/lib/pam.d/kde",  # KDE Plasma's kscreenlocker (kcheckpass), older naming
-    "/etc/pam.d/kscreenlocker-greet": "/usr/lib/pam.d/kscreenlocker-greet",  # same, newer naming
+    "/etc/pam.d/kde": "/usr/lib/pam.d/kde",  # KDE Plasma's kscreenlocker, password stack
     "/etc/pam.d/sddm": "/usr/lib/pam.d/sddm",  # SDDM login screen, i.e. right after a restart
 }
 
-GREETER_SERVICES = {"sddm", "sddm-greeter", "kde", "kde-np", "kscreenlocker-greet"}
+# IMPORTANT CAVEAT, learned the hard way: the two lock/login-screen entries
+# above ("kde", "sddm") are the PASSWORD auth stacks. PAM only evaluates a
+# stack when the calling app actually submits a credential through it --
+# for kscreenlocker/SDDM that means pressing Enter (even on an empty
+# password field), not the instant the lock screen appears. So face
+# recognition here is "hit Enter, then get scanned," not a fully passive
+# Windows-Hello-style scan. See EXPERIMENTAL_PAM_TARGETS below for the one
+# avenue that can be genuinely proactive.
+SUBMIT_REQUIRED_TARGETS = {"/etc/pam.d/kde", "/etc/pam.d/sddm"}
+
+# EXPERIMENTAL, opt-in only (facegate kde-passive-unlock on): Plasma 6's
+# kscreenlocker has a "multiauth" feature that proactively polls a
+# SEPARATE PAM service per credential type -- "kde" for password, and
+# "kde-fingerprint" for fingerprint readers -- without waiting for the
+# password field to be submitted. If we put FaceGate's line there instead
+# of/alongside "kde", kscreenlocker may attempt face recognition the
+# instant the screen locks, no Enter needed.
+#
+# Confirmed via Arch's kscreenlocker package: it ships kde-fingerprint as
+# a vendor PAM file under /usr/lib/pam.d/, so the file existing usually
+# isn't the blocker. What's NOT confirmed, and looks genuinely shaky per
+# real KDE bug reports (e.g. bugs.kde.org #485124, people with real,
+# correctly-enrolled fingerprint readers sometimes never seeing the
+# prompt at all): kscreenlocker appears to decide whether to proactively
+# poll this slot based on fprintd reporting an actual registered/enrolled
+# device over D-Bus, not just on the PAM file existing. Without a real
+# fprintd device, this may simply never fire, independent of anything
+# FaceGate does. Making the system believe a fingerprint device exists
+# (an fprintd D-Bus shim) would be a much bigger, separate project with
+# its own risks (conflicting with a real reader, poking at another
+# daemon's identity) -- not implemented here; ask explicitly if that
+# tradeoff is still worth it to you.
+EXPERIMENTAL_PAM_TARGETS = {
+    "/etc/pam.d/kde-fingerprint": "/usr/lib/pam.d/kde-fingerprint",
+}
+
+GREETER_SERVICES = {"sddm", "sddm-greeter", "kde", "kde-np", "kde-fingerprint"}
 
 
 def detect_display_manager():
@@ -94,13 +133,76 @@ def cmd_autosetup(args):
         print("Note: no IR stream detected. Your Brio unit may not have IR, or it")
         print("needs a different capture mode. FaceGate will run RGB-only.")
 
+    used_paths = {cfg["camera"].get("rgb_device"), cfg["camera"].get("ir_device")}
+    used_paths.discard(None)
+    other_candidates = camera.probe_candidates(exclude_paths=used_paths)
+    if other_candidates:
+        print("\nFound another camera not used above:")
+        for i, c in enumerate(other_candidates):
+            guess = "IR (guess)" if c["is_ir"] else "RGB (guess)"
+            print(f"  [{i}] {c['path']}  {c.get('description')}  {c['width']}x{c['height']}  -> {guess}")
+        add_answer = input(
+            "Add one of these as an additional camera for training/unlocking? [y/N]: "
+        ).strip().lower()
+        if add_answer == "y":
+            choice = input("Pick a device by number: ").strip()
+            try:
+                chosen = other_candidates[int(choice)]
+                kind = "ir" if chosen["is_ir"] else "rgb"
+                cam_id = f"cam2_{kind}"
+                threshold = 65 if kind == "ir" else 60
+                cfg.setdefault("extra_cameras", []).append(
+                    {"id": cam_id, "device": chosen["path"], "kind": kind, "threshold": threshold}
+                )
+                config.save(cfg)
+                print(f"Added '{cam_id}' ({chosen['path']}). It'll be enrolled along with the rest below.")
+            except (ValueError, IndexError):
+                print("Invalid choice -- skipping. You can add one later with 'facegate camera add'.")
+
+    hf_enabled_this_run = False
+    print(
+        "\nOptionally back up this first enrollment's face images to your Hugging Face "
+        f"dataset repo ('{cfg['hf_upload']['repo_id']}'). This is OFF by default, uploads "
+        "ONLY this one time (never for later re-enrollments), and blurs everything outside "
+        "your face before uploading -- but it does upload real photos of your face to a "
+        "remote service. Requires 'huggingface-cli login' already done on this machine."
+    )
+    hf_answer = input("Enable this? [y/N]: ").strip().lower()
+    if hf_answer == "y":
+        if not hf_upload.is_available():
+            print("huggingface_hub isn't installed. Install it and re-run to use this:")
+            print("  pip install --break-system-packages huggingface_hub")
+        else:
+            cfg["hf_upload"]["enabled"] = True
+            config.save(cfg)
+            hf_enabled_this_run = True
+            print("Enabled. Your first enrollment below will be backed up.")
+
     answer = input("\nType 'yes' to begin face enrollment now: ").strip().lower()
     if answer != "yes":
         print("Setup paused. Run 'sudo facegate enroll' when you're ready.")
         return
 
     username = os.environ.get("SUDO_USER") or getpass.getuser()
-    _do_enroll(username, cfg)
+    cfg = config.load()
+    already_uploaded = username in cfg["hf_upload"].get("uploaded_users", [])
+    should_collect = hf_enabled_this_run and not already_uploaded
+    result = _do_enroll(username, cfg, collect_for_upload=should_collect)
+
+    if should_collect and result.get("_raw_samples"):
+        print("\nUploading blurred enrollment images to Hugging Face...")
+        try:
+            uploaded = hf_upload.save_and_upload(
+                username, result["_raw_samples"], repo_id=cfg["hf_upload"]["repo_id"]
+            )
+            cfg = config.load()
+            cfg["hf_upload"].setdefault("uploaded_users", [])
+            if username not in cfg["hf_upload"]["uploaded_users"]:
+                cfg["hf_upload"]["uploaded_users"].append(username)
+            config.save(cfg)
+            print(f"Uploaded {len(uploaded)} image(s).")
+        except Exception as e:
+            print(f"Hugging Face upload failed (enrollment itself still succeeded): {e}")
 
     attempts_input = input(
         "\nHow many face-recognition attempts before falling back to your "
@@ -134,19 +236,25 @@ def cmd_autosetup(args):
     print("(If it doesn't recognize you, it silently falls back to your password.)")
 
 
-def _do_enroll(username, cfg, append=False):
+def _do_enroll(username, cfg, append=False, collect_for_upload=False):
     print(f"Enrolling face for user '{username}'.")
     if append:
         print("Appending new samples to the existing model (previous samples are kept).")
     print("Look directly at the camera and move your head slightly during capture.")
     try:
         result = recognizer.enroll_user(
-            username, cfg["camera"]["rgb_device"], cfg["camera"]["ir_device"], append=append
+            username,
+            cfg["camera"]["rgb_device"],
+            cfg["camera"]["ir_device"],
+            append=append,
+            extra_cameras=cfg.get("extra_cameras", []),
+            collect_for_upload=collect_for_upload,
         )
     except RuntimeError as e:
         print(f"Enrollment failed: {e}")
         sys.exit(1)
-    print(f"Enrollment complete: {result}")
+    printable = {k: v for k, v in result.items() if k != "_raw_samples"}
+    print(f"Enrollment complete: {printable}")
     if result.get("rgb_used_ir_fallback"):
         print(
             "NOTE: the RGB model was trained from IR-detected face crops because "
@@ -154,6 +262,7 @@ def _do_enroll(username, cfg, append=False):
             "weaker for this user until you re-run 'sudo facegate enroll' with "
             "working RGB capture (check lighting / camera angle)."
         )
+    return result
 
 
 def cmd_enroll(args):
@@ -168,14 +277,17 @@ def cmd_test(args):
     print(f"Testing recognition for '{username}' (this will NOT unlock or change anything)...")
     ok, info = recognizer.authenticate(username)
     print(f"Result: {'MATCH' if ok else 'NO MATCH'}")
-    print(f"Raw LBPH confidences (lower = better match): {info}")
-    if info.get("used_single_stream_fallback"):
-        stream = info["used_single_stream_fallback"]
-        other = "IR" if stream == "rgb" else "RGB"
+    print(f"Raw LBPH confidences (lower = better match): "
+          f"rgb={info.get('rgb_conf')} ir={info.get('ir_conf')} extra={info.get('extra_confs')}")
+    excluded = info.get("excluded_streams") or []
+    if excluded:
         print(
-            f"NOTE: the {other} stream never detected a face at all this attempt, "
-            f"so the result above was decided by {stream.upper()} alone."
+            f"NOTE: these streams never detected a face at all this attempt, so they "
+            f"were excluded rather than counted as a failure: {excluded}"
         )
+    considered = info.get("considered_streams") or []
+    if considered:
+        print(f"Streams that were actually used to decide the result: {considered}")
 
 
 def _install_pam(interactive=True):
@@ -241,9 +353,83 @@ def _install_pam(interactive=True):
         with open(pam_file, "w") as f:
             f.writelines(lines)
         print(f"{pam_file} updated. Backup: {backup}")
+        if pam_file in SUBMIT_REQUIRED_TARGETS:
+            print(
+                "  NOTE: this is the password stack, so it's only checked once you submit "
+                "the field (press Enter, even with it blank) -- not the instant the screen "
+                "appears. See 'facegate kde-passive-unlock' for an experimental proactive option."
+            )
         installed_any = True
     if not installed_any:
         print("No PAM files were modified.")
+
+
+def cmd_kde_passive_unlock(args):
+    require_root()
+    pam_file = "/etc/pam.d/kde-fingerprint"
+    vendor_fallback = EXPERIMENTAL_PAM_TARGETS[pam_file]
+
+    if args.state == "off":
+        if not os.path.exists(pam_file):
+            print(f"{pam_file} doesn't exist -- nothing to remove.")
+            return
+        with open(pam_file) as f:
+            lines = f.readlines()
+        new_lines = [l for l in lines if PAM_MARKER not in l]
+        if new_lines != lines:
+            with open(pam_file, "w") as f:
+                f.writelines(new_lines)
+            print(f"Removed FaceGate's line from {pam_file}.")
+        else:
+            print(f"FaceGate wasn't wired into {pam_file}.")
+        return
+
+    print(
+        "EXPERIMENTAL: this wires FaceGate into kscreenlocker's fingerprint-auth PAM\n"
+        "service instead of the password one, so it MAY be checked proactively as soon\n"
+        "as the screen locks -- no Enter required -- rather than only on submission.\n"
+        "Caveats:\n"
+        "  - The PAM file existing usually isn't the blocker (Arch's kscreenlocker\n"
+        "    package ships it). What's NOT confirmed: kscreenlocker appears to decide\n"
+        "    whether to proactively poll this slot based on fprintd reporting an\n"
+        "    actual registered fingerprint device -- real KDE bug reports show even\n"
+        "    people with genuine, correctly-enrolled fingerprint readers sometimes\n"
+        "    never get the prompt. Without a real fprintd device, this may just never\n"
+        "    fire, regardless of anything below succeeding.\n"
+        "  - Mixing non-password auth into the lock screen can interact oddly with\n"
+        "    KWallet's automatic-unlock-on-login, which assumes a real password login.\n"
+        "  - After enabling, lock your screen and check 'sudo facegate log' or\n"
+        "    'sudo journalctl -t facegate -e' to see whether it was invoked at all.\n"
+    )
+    confirm = input("Proceed anyway? [y/N]: ").strip().lower()
+    if confirm != "y":
+        print("Not enabled.")
+        return
+
+    if not os.path.exists(pam_file):
+        if not os.path.exists(vendor_fallback):
+            print(
+                f"Neither {pam_file} nor its vendor default {vendor_fallback} exist on "
+                "this system -- your kscreenlocker version may not support the "
+                "fingerprint multiauth slot. Nothing changed."
+            )
+            return
+        shutil.copy2(vendor_fallback, pam_file)
+        print(f"Created {pam_file} from {vendor_fallback}.")
+
+    with open(pam_file) as f:
+        content = f.read()
+    if PAM_MARKER in content:
+        print(f"{pam_file}: already configured.")
+        return
+    backup = pam_file + f".facegate.bak.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    shutil.copy2(pam_file, backup)
+    lines = content.splitlines(keepends=True)
+    lines.insert(0, PAM_LINE)
+    with open(pam_file, "w") as f:
+        f.writelines(lines)
+    print(f"{pam_file} updated. Backup: {backup}")
+    print("Lock your screen now and check 'sudo facegate log' to see if it triggered.")
 
 
 def cmd_enable(args):
@@ -391,14 +577,131 @@ def cmd_status(args):
     print(f"Enabled:      {cfg['enabled']}")
     print(f"RGB device:   {cfg['camera']['rgb_device']}")
     print(f"IR device:    {cfg['camera']['ir_device']}")
-    print(f"Require both streams to match: {cfg['recognition']['require_both']}")
+    extras = cfg.get("extra_cameras", [])
+    if extras:
+        print("Extra cameras:")
+        for c in extras:
+            print(f"  - {c['id']}: {c['device']} (kind={c.get('kind')}, threshold={c.get('threshold')})")
+    else:
+        print("Extra cameras: (none)")
+    print(f"Require all detecting streams to match: {cfg['recognition']['require_both']}")
     print(f"Max attempts before password fallback: {cfg['recognition']['max_attempts']}")
     print(f"PIN set:      {bool(cfg.get('pin_hash'))}")
+    hf = cfg.get("hf_upload", {})
+    print(
+        f"Hugging Face upload: enabled={hf.get('enabled', False)} repo={hf.get('repo_id')} "
+        f"already-uploaded-users={hf.get('uploaded_users', [])}"
+    )
     enrolled = []
     if os.path.isdir(config.MODEL_DIR):
         for fn in sorted(os.listdir(config.MODEL_DIR)):
             enrolled.append(fn)
     print(f"Model files:  {enrolled or '(none)'}")
+
+
+def cmd_camera_list(args):
+    cfg = config.load()
+    print("Primary pair:")
+    print(f"  rgb: {cfg['camera']['rgb_device']}")
+    print(f"  ir:  {cfg['camera']['ir_device']}")
+    extras = cfg.get("extra_cameras", [])
+    print(f"Extra cameras ({len(extras)}):")
+    for c in extras:
+        print(f"  - id={c['id']}  device={c['device']}  kind={c.get('kind')}  threshold={c.get('threshold')}")
+    if not extras:
+        print("  (none)")
+
+
+def cmd_camera_add(args):
+    require_root()
+    cfg = config.load()
+    used_paths = {cfg["camera"].get("rgb_device"), cfg["camera"].get("ir_device")}
+    used_paths |= {c["device"] for c in cfg.get("extra_cameras", [])}
+    used_paths.discard(None)
+
+    device = args.device
+    kind = args.kind
+
+    if not device:
+        print("Probing for additional Logitech devices not already in use...")
+        candidates = camera.probe_candidates(exclude_paths=used_paths)
+        if not candidates:
+            print("No unused Logitech devices found. Plug in the camera and try again, "
+                  "or pass --device /dev/videoN directly.")
+            sys.exit(1)
+        for i, c in enumerate(candidates):
+            guess = "IR (guess)" if c["is_ir"] else "RGB (guess)"
+            print(f"  [{i}] {c['path']}  {c.get('description')}  {c['width']}x{c['height']}  -> {guess}"
+                  f"  (classified_by={c['classified_by']})")
+        choice = input("Pick a device by number: ").strip()
+        try:
+            chosen = candidates[int(choice)]
+        except (ValueError, IndexError):
+            print("Invalid choice.")
+            sys.exit(1)
+        device = chosen["path"]
+        if kind is None:
+            kind = "ir" if chosen["is_ir"] else "rgb"
+
+    if kind is None:
+        kind = "rgb"
+
+    default_id = f"cam{len(cfg.get('extra_cameras', [])) + 2}_{kind}"
+    cam_id = args.id or default_id
+    existing_ids = {c["id"] for c in cfg.get("extra_cameras", [])} | {"rgb", "ir"}
+    if cam_id in existing_ids:
+        print(f"id '{cam_id}' is already in use. Pick a different --id.")
+        sys.exit(1)
+
+    threshold = args.threshold if args.threshold is not None else (65 if kind == "ir" else 60)
+    entry = {"id": cam_id, "device": device, "kind": kind, "threshold": threshold}
+    cfg.setdefault("extra_cameras", []).append(entry)
+    config.save(cfg)
+    print(f"Added camera '{cam_id}': {device} (kind={kind}, threshold={threshold}).")
+    print(f"Run 'sudo facegate enroll --append' to train this camera without disturbing "
+          f"your existing enrolled streams.")
+
+
+def cmd_camera_remove(args):
+    require_root()
+    cfg = config.load()
+    cam_id = args.id
+    if cam_id in ("rgb", "ir"):
+        cfg["camera"][f"{cam_id}_device"] = None
+        config.save(cfg)
+        print(f"Cleared the primary '{cam_id}' device from config. "
+              f"(Its model file, if any, is left in {config.MODEL_DIR}.)")
+        return
+    extras = cfg.get("extra_cameras", [])
+    remaining = [c for c in extras if c["id"] != cam_id]
+    if len(remaining) == len(extras):
+        print(f"No extra camera with id '{cam_id}' found. Run 'facegate camera list' to check.")
+        sys.exit(1)
+    cfg["extra_cameras"] = remaining
+    config.save(cfg)
+    print(f"Removed camera '{cam_id}' from config. Model files under {config.MODEL_DIR} "
+          f"matching '*_{cam_id}.yml' are left in place -- delete manually if you want them gone.")
+
+
+def cmd_hf_upload(args):
+    require_root()
+    cfg = config.load()
+    if args.state == "on":
+        if not hf_upload.is_available():
+            print("huggingface_hub isn't installed. Install it first:")
+            print("  pip install --break-system-packages huggingface_hub")
+            print("...and make sure you're logged in: huggingface-cli login")
+            sys.exit(1)
+        cfg["hf_upload"]["enabled"] = True
+        config.save(cfg)
+        print("Hugging Face upload enabled.")
+        print("This only ever uploads images from a user's very first successful enrollment --")
+        print("run 'sudo facegate enroll' for any username not yet in hf_upload.uploaded_users")
+        print("(check with 'facegate status') to trigger it; later --append sessions never upload.")
+    else:
+        cfg["hf_upload"]["enabled"] = False
+        config.save(cfg)
+        print("Hugging Face upload disabled.")
 
 
 def cmd_uninstall(args):
@@ -458,13 +761,77 @@ def cmd_doctor(args):
     if ir:
         check(f"IR model enrolled ({username})", os.path.exists(ir_model))
 
-    for pam_file in PAM_TARGETS:
+    # v0.2.2: facegate-auth runs as whatever user the calling PAM service
+    # runs as -- root for sudo, but the actual logged-in user for
+    # kscreenlocker. If config/models/log aren't world-readable/writable,
+    # non-root invocations fail before ever reaching a log call, which
+    # looks exactly like "silently does nothing" from the lock screen.
+    import stat
+
+    def _other_perm_ok(path, need_write=False):
+        try:
+            mode = os.stat(path).st_mode
+        except OSError:
+            return None
+        bit = stat.S_IWOTH if need_write else stat.S_IROTH
+        return bool(mode & bit)
+
+    perm_checks = [
+        (config.CONFIG_DIR, False, "world-traversable (0755)"),
+        (config.CONFIG_FILE, False, "world-readable (0644)"),
+        (config.MODEL_DIR, False, "world-traversable (0755)"),
+    ]
+    for path, need_write, label in perm_checks:
+        result = _other_perm_ok(path, need_write)
+        if result is None:
+            continue
+        check(f"{path} is {label}", result,
+              "" if result else "run 'sudo facegate enable' or 'sudo facegate doctor' again to self-heal")
+    for fn in (os.listdir(config.MODEL_DIR) if os.path.isdir(config.MODEL_DIR) else []):
+        p = os.path.join(config.MODEL_DIR, fn)
+        if not _other_perm_ok(p):
+            check(f"model file world-readable: {p}", False, "run 'sudo facegate doctor' again to self-heal")
+    if os.path.isdir(logging_setup.LOG_DIR):
+        check(f"{logging_setup.LOG_DIR} is world-writable (sticky 1777)",
+              bool(_other_perm_ok(logging_setup.LOG_DIR, need_write=True)))
+
+    if username != "root":
+        try:
+            import grp
+            video_members = grp.getgrnam("video").gr_mem
+            in_video = username in video_members
+        except (KeyError, ImportError):
+            in_video = None
+        if in_video is not None:
+            check(f"{username} is in the 'video' group", in_video,
+                  "" if in_video else f"run: sudo usermod -aG video {username}  (then log out/in)")
+
+    for pam_file, vendor_fallback in PAM_TARGETS.items():
         if not os.path.exists(pam_file):
-            print(f"[skip] PAM file not present: {pam_file} (not applicable on this system)")
+            if vendor_fallback and os.path.exists(vendor_fallback):
+                print(f"[FAIL] PAM wired: {pam_file} -- not created yet, run 'sudo facegate enable'")
+                ok_all = False
+            else:
+                print(f"[skip] PAM file not present: {pam_file} (not applicable on this system)")
             continue
         with open(pam_file) as f:
             wired = PAM_MARKER in f.read()
-        check(f"PAM wired: {pam_file}", wired)
+        note = " (password stack -- only checked once submitted, see README)" if pam_file in SUBMIT_REQUIRED_TARGETS else ""
+        check(f"PAM wired: {pam_file}{note}", wired)
+
+    exp_file = "/etc/pam.d/kde-fingerprint"
+    exp_vendor = EXPERIMENTAL_PAM_TARGETS[exp_file]
+    if os.path.exists(exp_file):
+        with open(exp_file) as f:
+            exp_wired = PAM_MARKER in f.read()
+        print(f"[{'OK  ' if exp_wired else 'off '}] experimental kde-passive-unlock: {exp_file}"
+              + (" -- wired" if exp_wired else " -- not enabled ('facegate kde-passive-unlock on' to try it)"))
+    elif os.path.exists(exp_vendor):
+        print(f"[off ] experimental kde-passive-unlock: vendor default exists at {exp_vendor} but "
+              f"{exp_file} hasn't been created yet -- 'facegate kde-passive-unlock on' to try it")
+    else:
+        print(f"[skip] experimental kde-passive-unlock: neither {exp_file} nor {exp_vendor} exist "
+              f"on this system (kscreenlocker version may not ship it)")
 
     locked, remaining = security.is_locked_out()
     check("not currently locked out", not locked, f"{remaining}s remaining" if locked else "")
@@ -551,6 +918,36 @@ def main():
     p.add_argument("--ir-threshold", type=int, default=None, help="New confidence_threshold_ir (higher = looser)")
     p.add_argument("--min-face-size", type=int, default=None, help="New min_face_size in pixels (lower = looser)")
     p.set_defaults(func=cmd_relax)
+
+    cam_parser = sub.add_parser("camera", help="Manage cameras beyond the primary rgb/ir pair")
+    cam_sub = cam_parser.add_subparsers(dest="camera_command", required=True)
+
+    cam_sub.add_parser("list", help="Show all configured cameras").set_defaults(func=cmd_camera_list)
+
+    p = cam_sub.add_parser("add", help="Add an extra camera (e.g. a second webcam with no IR)")
+    p.add_argument("--device", help="e.g. /dev/video6 (default: interactively pick from unused devices)")
+    p.add_argument("--id", help="unique name for this camera (default: auto-generated)")
+    p.add_argument("--kind", choices=["rgb", "ir"], default=None, help="default: auto-detected")
+    p.add_argument("--threshold", type=int, default=None, help="LBPH confidence threshold (default: 60 rgb / 65 ir)")
+    p.set_defaults(func=cmd_camera_add)
+
+    p = cam_sub.add_parser("remove", help="Remove a camera by id ('rgb' and 'ir' clear the primary pair)")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_camera_remove)
+
+    p = sub.add_parser(
+        "hf-upload",
+        help="Enable/disable optional first-enrollment backup to your Hugging Face dataset repo",
+    )
+    p.add_argument("state", choices=["on", "off"])
+    p.set_defaults(func=cmd_hf_upload)
+
+    p = sub.add_parser(
+        "kde-passive-unlock",
+        help="EXPERIMENTAL: try proactive (no-Enter) face check via kscreenlocker's fingerprint slot",
+    )
+    p.add_argument("state", choices=["on", "off"])
+    p.set_defaults(func=cmd_kde_passive_unlock)
 
     sub.add_parser("uninstall", help="Remove PAM integration").set_defaults(func=cmd_uninstall)
 
