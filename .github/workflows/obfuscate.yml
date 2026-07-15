@@ -25,14 +25,14 @@ jobs:
       - name: Publish to obfuscated-build branch
         run: |
           set -e
-          git config user.name "facegate-bot"
+          git config user.name "visagate-bot"
           git config user.email "actions@users.noreply.github.com"
 
           # Stage exactly what we want to publish outside the checkout first,
           # so we can safely wipe the working tree without losing it.
           rm -rf /tmp/publish
-          mkdir -p /tmp/publish/facegate
-          cp -r facegate_obfuscated/. /tmp/publish/facegate/
+          mkdir -p /tmp/publish/visagate
+          cp -r visagate_obfuscated/. /tmp/publish/visagate/
           cp install.sh pyproject.toml PKGBUILD requirements.txt README.md /tmp/publish/ 2>/dev/null || true
 
           # Fresh orphan branch each run -- this is a generated artifact, not

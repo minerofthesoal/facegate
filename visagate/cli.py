@@ -9,7 +9,7 @@ import time
 
 from . import __version__, camera, config, hf_upload, recognizer, security
 
-PAM_MARKER = "facegate-auth"
+PAM_MARKER = "visagate-auth"
 PAM_LINE = f"auth    sufficient   pam_exec.so quiet /usr/bin/{PAM_MARKER}\n"
 
 # target PAM file -> vendor-default fallback to seed it from, if the target
@@ -45,11 +45,11 @@ PAM_TARGETS = {
 # avenue that can be genuinely proactive.
 SUBMIT_REQUIRED_TARGETS = {"/etc/pam.d/kde", "/etc/pam.d/sddm"}
 
-# EXPERIMENTAL, opt-in only (facegate kde-passive-unlock on): Plasma 6's
+# EXPERIMENTAL, opt-in only (visagate kde-passive-unlock on): Plasma 6's
 # kscreenlocker has a "multiauth" feature that proactively polls a
 # SEPARATE PAM service per credential type -- "kde" for password, and
 # "kde-fingerprint" for fingerprint readers -- without waiting for the
-# password field to be submitted. If we put FaceGate's line there instead
+# password field to be submitted. If we put Visagate's line there instead
 # of/alongside "kde", kscreenlocker may attempt face recognition the
 # instant the screen locks, no Enter needed.
 #
@@ -62,7 +62,7 @@ SUBMIT_REQUIRED_TARGETS = {"/etc/pam.d/kde", "/etc/pam.d/sddm"}
 # poll this slot based on fprintd reporting an actual registered/enrolled
 # device over D-Bus, not just on the PAM file existing. Without a real
 # fprintd device, this may simply never fire, independent of anything
-# FaceGate does. Making the system believe a fingerprint device exists
+# Visagate does. Making the system believe a fingerprint device exists
 # (an fprintd D-Bus shim) would be a much bigger, separate project with
 # its own risks (conflicting with a real reader, poking at another
 # daemon's identity) -- not implemented here; ask explicitly if that
@@ -95,7 +95,7 @@ def require_root():
 
 def cmd_autosetup(args):
     require_root()
-    print("== FaceGate autosetup ==")
+    print("== Visagate autosetup ==")
     dm = detect_display_manager()
     print(f"Detected display manager: {dm or 'unknown'}")
     print("Scanning for Logitech camera devices (v4l2-ctl)...")
@@ -116,7 +116,7 @@ def cmd_autosetup(args):
 
     if not rgb and not ir:
         print("\nCould not confidently classify any stream as RGB or IR.")
-        print("Edit /etc/facegate/config.json manually to set camera.rgb_device / camera.ir_device.")
+        print("Edit /etc/visagate/config.json manually to set camera.rgb_device / camera.ir_device.")
         sys.exit(1)
 
     cfg = config.load()
@@ -131,7 +131,7 @@ def cmd_autosetup(args):
     print(f"Selected IR device:  {cfg['camera']['ir_device']}")
     if not ir:
         print("Note: no IR stream detected. Your Brio unit may not have IR, or it")
-        print("needs a different capture mode. FaceGate will run RGB-only.")
+        print("needs a different capture mode. Visagate will run RGB-only.")
 
     used_paths = {cfg["camera"].get("rgb_device"), cfg["camera"].get("ir_device")}
     used_paths.discard(None)
@@ -157,7 +157,7 @@ def cmd_autosetup(args):
                 config.save(cfg)
                 print(f"Added '{cam_id}' ({chosen['path']}). It'll be enrolled along with the rest below.")
             except (ValueError, IndexError):
-                print("Invalid choice -- skipping. You can add one later with 'facegate camera add'.")
+                print("Invalid choice -- skipping. You can add one later with 'visagate camera add'.")
 
     hf_enabled_this_run = False
     print(
@@ -180,7 +180,7 @@ def cmd_autosetup(args):
 
     answer = input("\nType 'yes' to begin face enrollment now: ").strip().lower()
     if answer != "yes":
-        print("Setup paused. Run 'sudo facegate enroll' when you're ready.")
+        print("Setup paused. Run 'sudo visagate enroll' when you're ready.")
         return
 
     username = os.environ.get("SUDO_USER") or getpass.getuser()
@@ -222,7 +222,7 @@ def cmd_autosetup(args):
     pin = getpass.getpass("New PIN: ")
     confirm = getpass.getpass("Confirm PIN: ")
     if pin != confirm:
-        print("PINs did not match. Run 'sudo facegate set-pin' to try again.")
+        print("PINs did not match. Run 'sudo visagate set-pin' to try again.")
     else:
         security.set_pin(pin)
         print("PIN saved.")
@@ -232,7 +232,7 @@ def cmd_autosetup(args):
     cfg = config.load()
     cfg["enabled"] = True
     config.save(cfg)
-    print("\nFaceGate is enabled. Test it with: sudo -k && sudo true")
+    print("\nVisagate is enabled. Test it with: sudo -k && sudo true")
     print("(If it doesn't recognize you, it silently falls back to your password.)")
 
 
@@ -259,7 +259,7 @@ def _do_enroll(username, cfg, append=False, collect_for_upload=False):
         print(
             "NOTE: the RGB model was trained from IR-detected face crops because "
             "not enough RGB samples were captured. Two-stream verification is "
-            "weaker for this user until you re-run 'sudo facegate enroll' with "
+            "weaker for this user until you re-run 'sudo visagate enroll' with "
             "working RGB capture (check lighting / camera angle)."
         )
     return result
@@ -316,12 +316,12 @@ def _install_pam(interactive=True):
                 print(f"{pam_file}: already configured, skipping.")
                 installed_any = True
                 continue
-            # A FaceGate line exists but doesn't match the current PAM_LINE --
+            # A Visagate line exists but doesn't match the current PAM_LINE --
             # most likely an older version (e.g. the expose_authtok flag that
             # used to force a password prompt before face auth even ran).
             # Repair it in place rather than leaving the stale behavior.
             if interactive:
-                print(f"\n{pam_file} has an outdated FaceGate line:")
+                print(f"\n{pam_file} has an outdated Visagate line:")
                 for i in marker_idxs:
                     print("  - " + lines[i].strip())
                 print("Replacing with:")
@@ -330,7 +330,7 @@ def _install_pam(interactive=True):
                 if confirm != "y":
                     print(f"Skipped {pam_file}.")
                     continue
-            backup = pam_file + f".facegate.bak.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+            backup = pam_file + f".visagate.bak.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
             shutil.copy2(pam_file, backup)
             for i in marker_idxs:
                 lines[i] = PAM_LINE
@@ -341,13 +341,13 @@ def _install_pam(interactive=True):
             continue
 
         if interactive:
-            print(f"\nAbout to insert a FaceGate auth line into {pam_file}:")
+            print(f"\nAbout to insert a Visagate auth line into {pam_file}:")
             print("  " + PAM_LINE.strip())
             confirm = input("Proceed? [y/N]: ").strip().lower()
             if confirm != "y":
                 print(f"Skipped {pam_file}.")
                 continue
-        backup = pam_file + f".facegate.bak.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        backup = pam_file + f".visagate.bak.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
         shutil.copy2(pam_file, backup)
         lines.insert(0, PAM_LINE)
         with open(pam_file, "w") as f:
@@ -357,7 +357,7 @@ def _install_pam(interactive=True):
             print(
                 "  NOTE: this is the password stack, so it's only checked once you submit "
                 "the field (press Enter, even with it blank) -- not the instant the screen "
-                "appears. See 'facegate kde-passive-unlock' for an experimental proactive option."
+                "appears. See 'visagate kde-passive-unlock' for an experimental proactive option."
             )
         installed_any = True
     if not installed_any:
@@ -379,13 +379,13 @@ def cmd_kde_passive_unlock(args):
         if new_lines != lines:
             with open(pam_file, "w") as f:
                 f.writelines(new_lines)
-            print(f"Removed FaceGate's line from {pam_file}.")
+            print(f"Removed Visagate's line from {pam_file}.")
         else:
-            print(f"FaceGate wasn't wired into {pam_file}.")
+            print(f"Visagate wasn't wired into {pam_file}.")
         return
 
     print(
-        "EXPERIMENTAL: this wires FaceGate into kscreenlocker's fingerprint-auth PAM\n"
+        "EXPERIMENTAL: this wires Visagate into kscreenlocker's fingerprint-auth PAM\n"
         "service instead of the password one, so it MAY be checked proactively as soon\n"
         "as the screen locks -- no Enter required -- rather than only on submission.\n"
         "Caveats:\n"
@@ -398,8 +398,8 @@ def cmd_kde_passive_unlock(args):
         "    fire, regardless of anything below succeeding.\n"
         "  - Mixing non-password auth into the lock screen can interact oddly with\n"
         "    KWallet's automatic-unlock-on-login, which assumes a real password login.\n"
-        "  - After enabling, lock your screen and check 'sudo facegate log' or\n"
-        "    'sudo journalctl -t facegate -e' to see whether it was invoked at all.\n"
+        "  - After enabling, lock your screen and check 'sudo visagate log' or\n"
+        "    'sudo journalctl -t visagate -e' to see whether it was invoked at all.\n"
     )
     confirm = input("Proceed anyway? [y/N]: ").strip().lower()
     if confirm != "y":
@@ -422,14 +422,14 @@ def cmd_kde_passive_unlock(args):
     if PAM_MARKER in content:
         print(f"{pam_file}: already configured.")
         return
-    backup = pam_file + f".facegate.bak.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    backup = pam_file + f".visagate.bak.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
     shutil.copy2(pam_file, backup)
     lines = content.splitlines(keepends=True)
     lines.insert(0, PAM_LINE)
     with open(pam_file, "w") as f:
         f.writelines(lines)
     print(f"{pam_file} updated. Backup: {backup}")
-    print("Lock your screen now and check 'sudo facegate log' to see if it triggered.")
+    print("Lock your screen now and check 'sudo visagate log' to see if it triggered.")
 
 
 def cmd_enable(args):
@@ -519,7 +519,7 @@ def cmd_relax(args):
     print(f"  min_face_size:            {before['min_face_size']} -> {rec['min_face_size']}")
     print(
         "\nNote: higher thresholds and smaller min_face_size make it easier for YOU to "
-        "pass, but also easier for a false match. Run 'sudo facegate test' to sanity-check."
+        "pass, but also easier for a false match. Run 'sudo visagate test' to sanity-check."
     )
 
 
@@ -658,7 +658,7 @@ def cmd_camera_add(args):
     cfg.setdefault("extra_cameras", []).append(entry)
     config.save(cfg)
     print(f"Added camera '{cam_id}': {device} (kind={kind}, threshold={threshold}).")
-    print(f"Run 'sudo facegate enroll --append' to train this camera without disturbing "
+    print(f"Run 'sudo visagate enroll --append' to train this camera without disturbing "
           f"your existing enrolled streams.")
 
 
@@ -675,7 +675,7 @@ def cmd_camera_remove(args):
     extras = cfg.get("extra_cameras", [])
     remaining = [c for c in extras if c["id"] != cam_id]
     if len(remaining) == len(extras):
-        print(f"No extra camera with id '{cam_id}' found. Run 'facegate camera list' to check.")
+        print(f"No extra camera with id '{cam_id}' found. Run 'visagate camera list' to check.")
         sys.exit(1)
     cfg["extra_cameras"] = remaining
     config.save(cfg)
@@ -696,8 +696,8 @@ def cmd_hf_upload(args):
         config.save(cfg)
         print("Hugging Face upload enabled.")
         print("This only ever uploads images from a user's very first successful enrollment --")
-        print("run 'sudo facegate enroll' for any username not yet in hf_upload.uploaded_users")
-        print("(check with 'facegate status') to trigger it; later --append sessions never upload.")
+        print("run 'sudo visagate enroll' for any username not yet in hf_upload.uploaded_users")
+        print("(check with 'visagate status') to trigger it; later --append sessions never upload.")
     else:
         cfg["hf_upload"]["enabled"] = False
         config.save(cfg)
@@ -706,7 +706,7 @@ def cmd_hf_upload(args):
 
 def cmd_uninstall(args):
     require_root()
-    if not security.confirm_privileged_action("Uninstalling FaceGate requires confirmation."):
+    if not security.confirm_privileged_action("Uninstalling Visagate requires confirmation."):
         sys.exit(1)
     for pam_file in PAM_TARGETS:
         if not os.path.exists(pam_file):
@@ -717,7 +717,7 @@ def cmd_uninstall(args):
         if new_lines != lines:
             with open(pam_file, "w") as f:
                 f.writelines(new_lines)
-            print(f"Removed FaceGate line from {pam_file}")
+            print(f"Removed Visagate line from {pam_file}")
     print("PAM integration removed.")
     print(f"Face model files are still in {config.MODEL_DIR} -- delete manually if you want them gone too.")
 
@@ -728,7 +728,7 @@ def cmd_doctor(args):
     require_root()
     from . import logging_setup
 
-    print("== FaceGate doctor ==")
+    print("== Visagate doctor ==")
     ok_all = True
 
     def check(label, ok, detail=""):
@@ -739,7 +739,7 @@ def cmd_doctor(args):
             ok_all = False
 
     cfg = config.load()
-    check("face unlock enabled", cfg.get("enabled"), "" if cfg.get("enabled") else "run 'sudo facegate enable'")
+    check("face unlock enabled", cfg.get("enabled"), "" if cfg.get("enabled") else "run 'sudo visagate enable'")
 
     dm = detect_display_manager()
     print(f"     display manager: {dm or 'unknown'}")
@@ -750,7 +750,7 @@ def cmd_doctor(args):
 
     rgb = cfg["camera"].get("rgb_device")
     ir = cfg["camera"].get("ir_device")
-    check("RGB device configured", bool(rgb), rgb or "none -- run 'sudo facegate autosetup'")
+    check("RGB device configured", bool(rgb), rgb or "none -- run 'sudo visagate autosetup'")
     check("IR device configured", bool(ir), ir or "none (RGB-only mode -- fine if your webcam has no IR sensor)")
 
     username = os.environ.get("SUDO_USER") or getpass.getuser()
@@ -761,7 +761,7 @@ def cmd_doctor(args):
     if ir:
         check(f"IR model enrolled ({username})", os.path.exists(ir_model))
 
-    # v0.2.2: facegate-auth runs as whatever user the calling PAM service
+    # v0.2.2: visagate-auth runs as whatever user the calling PAM service
     # runs as -- root for sudo, but the actual logged-in user for
     # kscreenlocker. If config/models/log aren't world-readable/writable,
     # non-root invocations fail before ever reaching a log call, which
@@ -786,11 +786,11 @@ def cmd_doctor(args):
         if result is None:
             continue
         check(f"{path} is {label}", result,
-              "" if result else "run 'sudo facegate enable' or 'sudo facegate doctor' again to self-heal")
+              "" if result else "run 'sudo visagate enable' or 'sudo visagate doctor' again to self-heal")
     for fn in (os.listdir(config.MODEL_DIR) if os.path.isdir(config.MODEL_DIR) else []):
         p = os.path.join(config.MODEL_DIR, fn)
         if not _other_perm_ok(p):
-            check(f"model file world-readable: {p}", False, "run 'sudo facegate doctor' again to self-heal")
+            check(f"model file world-readable: {p}", False, "run 'sudo visagate doctor' again to self-heal")
     if os.path.isdir(logging_setup.LOG_DIR):
         check(f"{logging_setup.LOG_DIR} is world-writable (sticky 1777)",
               bool(_other_perm_ok(logging_setup.LOG_DIR, need_write=True)))
@@ -809,7 +809,7 @@ def cmd_doctor(args):
     for pam_file, vendor_fallback in PAM_TARGETS.items():
         if not os.path.exists(pam_file):
             if vendor_fallback and os.path.exists(vendor_fallback):
-                print(f"[FAIL] PAM wired: {pam_file} -- not created yet, run 'sudo facegate enable'")
+                print(f"[FAIL] PAM wired: {pam_file} -- not created yet, run 'sudo visagate enable'")
                 ok_all = False
             else:
                 print(f"[skip] PAM file not present: {pam_file} (not applicable on this system)")
@@ -825,10 +825,10 @@ def cmd_doctor(args):
         with open(exp_file) as f:
             exp_wired = PAM_MARKER in f.read()
         print(f"[{'OK  ' if exp_wired else 'off '}] experimental kde-passive-unlock: {exp_file}"
-              + (" -- wired" if exp_wired else " -- not enabled ('facegate kde-passive-unlock on' to try it)"))
+              + (" -- wired" if exp_wired else " -- not enabled ('visagate kde-passive-unlock on' to try it)"))
     elif os.path.exists(exp_vendor):
         print(f"[off ] experimental kde-passive-unlock: vendor default exists at {exp_vendor} but "
-              f"{exp_file} hasn't been created yet -- 'facegate kde-passive-unlock on' to try it")
+              f"{exp_file} hasn't been created yet -- 'visagate kde-passive-unlock on' to try it")
     else:
         print(f"[skip] experimental kde-passive-unlock: neither {exp_file} nor {exp_vendor} exist "
               f"on this system (kscreenlocker version may not ship it)")
@@ -846,7 +846,7 @@ def cmd_doctor(args):
 
 
 def cmd_log(args):
-    """Show recent auth attempts from the FaceGate log file. New in v0.2.0."""
+    """Show recent auth attempts from the Visagate log file. New in v0.2.0."""
     from . import logging_setup
 
     try:
@@ -855,7 +855,7 @@ def cmd_log(args):
     except FileNotFoundError:
         print(f"No log file yet at {logging_setup.LOG_FILE}.")
         print("Either nothing has run through PAM yet, or you're on syslog-only:")
-        print("  sudo journalctl -t facegate -e")
+        print("  sudo journalctl -t visagate -e")
         return
     except PermissionError:
         print(f"Permission denied reading {logging_setup.LOG_FILE} -- try with sudo.")
@@ -867,10 +867,10 @@ def cmd_log(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="facegate",
+        prog="visagate",
         description="Face unlock for Logitech webcams on Arch Linux (Howdy-style, RGB+IR where available).",
     )
-    parser.add_argument("--version", action="version", version=f"facegate {__version__}")
+    parser.add_argument("--version", action="version", version=f"visagate {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("autosetup", help="Detect camera, enroll your face, wire up PAM").set_defaults(
@@ -955,7 +955,7 @@ def main():
         "doctor", help="Run health checks: camera, PAM wiring, enrolled models, lockout, logs"
     ).set_defaults(func=cmd_doctor)
 
-    p = sub.add_parser("log", help="Show recent auth attempts from the FaceGate log")
+    p = sub.add_parser("log", help="Show recent auth attempts from the Visagate log")
     p.add_argument("-n", type=int, default=20, help="number of lines to show (default 20)")
     p.set_defaults(func=cmd_log)
 

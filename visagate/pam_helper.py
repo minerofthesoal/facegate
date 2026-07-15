@@ -8,12 +8,12 @@ pam_exec sets PAM_USER (account being authenticated) and PAM_SERVICE
 (which PAM service triggered this -- "sudo", "login", "kde",
 "kde-fingerprint", "sddm", etc.) in the environment; we use both.
 
-Every attempt is logged to syslog (facility LOG_AUTH, ident "facegate")
-AND to /var/log/facegate/facegate.log (see logging_setup.py, new in
+Every attempt is logged to syslog (facility LOG_AUTH, ident "visagate")
+AND to /var/log/visagate/visagate.log (see logging_setup.py, new in
 v0.2.0) so a silent fall-through to password can actually be diagnosed
 after the fact instead of just being a mystery exit code 1:
-    sudo journalctl -t facegate -e
-    sudo facegate log
+    sudo journalctl -t visagate -e
+    sudo visagate log
 """
 import fcntl
 import os
@@ -30,12 +30,12 @@ from .logging_setup import get_logger
 # instead of the sudo-context timeout_seconds. New in v0.2.0.
 GREETER_SERVICES = {"sddm", "sddm-greeter", "kde", "kde-np", "kde-fingerprint"}
 
-CAMERA_LOCK_FILE = "/run/facegate/camera.lock"
+CAMERA_LOCK_FILE = "/run/visagate/camera.lock"
 
 
 def _log(message, level=syslog.LOG_INFO):
     try:
-        syslog.openlog(ident="facegate", facility=syslog.LOG_AUTH)
+        syslog.openlog(ident="visagate", facility=syslog.LOG_AUTH)
         syslog.syslog(level, message)
     except Exception:
         pass  # logging must never be the reason auth fails closed
@@ -53,7 +53,7 @@ def _acquire_camera_lock(timeout=3.0):
     "cannot open camera device" failure instead of a clean, explained
     fallback to password. New in v0.2.0."""
     try:
-        os.makedirs("/run/facegate", exist_ok=True)
+        os.makedirs("/run/visagate", exist_ok=True)
         fd = os.open(CAMERA_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
     except OSError:
         return None

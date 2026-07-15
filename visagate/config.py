@@ -1,15 +1,15 @@
-"""Configuration storage for FaceGate.
+"""Configuration storage for Visagate.
 
-v0.2.2 permission model change, and why: facegate-auth is invoked by
+v0.2.2 permission model change, and why: visagate-auth is invoked by
 pam_exec running with whatever privileges the CALLING PAM service has --
 that's root for `sudo` (which stays root through its whole auth phase
 before dropping privileges), but it's your regular logged-in user for
 KDE's kscreenlocker (which just re-confirms you're still you, no
 escalation needed), and possibly a dedicated system account for other
-greeters. A facegate-auth run as a non-root user could not read the old
+greeters. A visagate-auth run as a non-root user could not read the old
 0700/0600 root-only config+model files at all, and failed instantly
 before it ever reached a logging call -- which is exactly why lock-screen
-attempts silently never showed up in `facegate log`.
+attempts silently never showed up in `visagate log`.
 
 Fix: config.json and the per-user model files are now root-owned but
 WORLD-READABLE (0644 file / 0755 dirs) -- none of that data is a secret
@@ -17,7 +17,7 @@ WORLD-READABLE (0644 file / 0755 dirs) -- none of that data is a secret
 passwords or photos). Only root can write them. The one genuinely
 sensitive value, the disable/uninstall PIN hash, lives in a SEPARATE file
 (pin.json) that stays strictly root-only (0600) -- pam_helper.py never
-needs to read it, only the `facegate` CLI commands that already require
+needs to read it, only the `visagate` CLI commands that already require
 root do.
 
 Trade-off worth knowing: any local user can now read another local
@@ -28,7 +28,7 @@ the cost of a pam_exec-based design working at all outside `sudo`.
 import json
 import os
 
-CONFIG_DIR = "/etc/facegate"
+CONFIG_DIR = "/etc/visagate"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 PIN_FILE = os.path.join(CONFIG_DIR, "pin.json")
 MODEL_DIR = os.path.join(CONFIG_DIR, "models")
@@ -49,7 +49,7 @@ DEFAULTS = {
     "camera_wait_seconds": 5,
     "recognition": {
         # LBPH: LOWER confidence value = better match. These thresholds are
-        # conservative starting points; `facegate test` will show you real
+        # conservative starting points; `visagate test` will show you real
         # numbers for your face/lighting so you can tune them.
         "confidence_threshold_rgb": 60,
         "confidence_threshold_ir": 65,
@@ -57,7 +57,7 @@ DEFAULTS = {
         # How many distinct face-match attempts to make (each attempt gets
         # its own short time slice) before giving up and letting PAM fall
         # through to the normal password prompt. Configurable via
-        # `facegate set-attempts N`.
+        # `visagate set-attempts N`.
         "max_attempts": 2,
         "timeout_seconds": 8,
         # Shorter budget used specifically for greeter/lock-screen PAM
@@ -74,7 +74,7 @@ DEFAULTS = {
     },
     # Brute-force / repeated-spoofing-attempt protection. After
     # max_failed_attempts consecutive failures (across ALL PAM contexts,
-    # counted process-wide via /run/facegate/lockout.json), face auth is
+    # counted process-wide via /run/visagate/lockout.json), face auth is
     # skipped for cooldown_seconds and PAM falls straight to password --
     # not just for the current login attempt, but until the cooldown
     # expires. State lives under /run (tmpfs) so a lockout doesn't
@@ -89,9 +89,9 @@ DEFAULTS = {
     #   {"id": "c930c_rgb", "device": "/dev/videoN", "kind": "rgb",
     #    "threshold": 60}
     # `id` must be unique and is used to name that stream's model file
-    # (facegate_{username}_{id}.yml) and in diagnostics. `kind` is "rgb"
+    # (visagate_{username}_{id}.yml) and in diagnostics. `kind` is "rgb"
     # or "ir" (informational + picks the default threshold when one isn't
-    # given). Managed via `facegate camera add/remove/list`. New in v0.2.1.
+    # given). Managed via `visagate camera add/remove/list`. New in v0.2.1.
     "extra_cameras": [],
     # Optional, OFF BY DEFAULT backup of the very first successful
     # enrollment's face images (all configured streams, background
@@ -99,7 +99,7 @@ DEFAULTS = {
     # from later re-enrollments or `--append` sessions -- only the first
     # time a given username is ever enrolled while this is turned on.
     # Requires `huggingface_hub` installed and `huggingface-cli login`
-    # already run (FaceGate never stores or asks for a token itself).
+    # already run (Visagate never stores or asks for a token itself).
     # New in v0.2.1.
     "hf_upload": {
         "enabled": False,

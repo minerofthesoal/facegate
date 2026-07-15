@@ -1,17 +1,17 @@
-"""Guards for privileged FaceGate actions (disable / uninstall / change PIN).
+"""Guards for privileged Visagate actions (disable / uninstall / change PIN).
 
 Two independent unlock paths are supported, matching the request: the
-account's real password, or a separate FaceGate-only PIN. Either is
+account's real password, or a separate Visagate-only PIN. Either is
 accepted so a PIN can be handed out for quick toggling without sharing
 the real system password.
 
 IMPORTANT: password verification here deliberately does NOT go through
-the system `sudo`/`login`/`kde` PAM stacks, because FaceGate itself adds
+the system `sudo`/`login`/`kde` PAM stacks, because Visagate itself adds
 a `pam_exec.so ... sufficient` face-auth line to those. If we verified
 "do you know the password" via regular `sudo`, a successfully spoofed (or
 just successfully recognized) face would satisfy that check too, letting
 face recognition alone disable face recognition. Instead we maintain our
-own tiny PAM service, `facegate-verify`, containing nothing but
+own tiny PAM service, `visagate-verify`, containing nothing but
 `pam_unix.so` -- no face auth is ever added to it -- so this check can
 only ever be satisfied by the real account password.
 """
@@ -25,16 +25,16 @@ import time
 
 from . import config
 
-VERIFY_SERVICE_NAME = "facegate-verify"
+VERIFY_SERVICE_NAME = "visagate-verify"
 VERIFY_SERVICE_FILE = f"/etc/pam.d/{VERIFY_SERVICE_NAME}"
 
-# Lockout state lives on tmpfs, not under /etc/facegate: it's meant to
+# Lockout state lives on tmpfs, not under /etc/visagate: it's meant to
 # reset on reboot (a lockout surviving a reboot just because someone was
 # fumbling with lighting last night is a worse user experience than the
 # security gain is worth), and it needs to be safely shared/locked across
 # concurrent PAM invocations (sudo + lock screen firing at once). New in
 # v0.2.0.
-LOCKOUT_DIR = "/run/facegate"
+LOCKOUT_DIR = "/run/visagate"
 LOCKOUT_STATE_FILE = os.path.join(LOCKOUT_DIR, "lockout.json")
 LOCKOUT_LOCK_FILE = os.path.join(LOCKOUT_DIR, "lockout.lock")
 
@@ -44,9 +44,9 @@ def ensure_verify_service():
     if os.path.exists(VERIFY_SERVICE_FILE):
         return
     content = (
-        "# Managed by FaceGate.\n"
+        "# Managed by Visagate.\n"
         "# Do NOT add pam_exec/face-auth lines to this file. It exists\n"
-        "# specifically so FaceGate's internal 'confirm your real password'\n"
+        "# specifically so Visagate's internal 'confirm your real password'\n"
         "# check can never be satisfied by face recognition.\n"
         "auth     required   pam_unix.so\n"
         "account  required   pam_unix.so\n"
@@ -57,7 +57,7 @@ def ensure_verify_service():
 
 
 def verify_sudo_password():
-    """Verify the real account password via the isolated facegate-verify
+    """Verify the real account password via the isolated visagate-verify
     PAM service (falls back to `sudo -S` only if python-pam isn't
     installed -- that fallback path IS subject to the face-auth caveat
     above, so python-pam is installed by default in install.sh)."""
@@ -194,7 +194,7 @@ def is_locked_out():
 
 
 def clear_lockout():
-    """Manually clear a cooldown (used by `sudo facegate enable`, so
+    """Manually clear a cooldown (used by `sudo visagate enable`, so
     re-enabling after tuning thresholds doesn't leave you locked out from
     the tuning attempts themselves)."""
     _with_lockout_lock(lambda: _save_lockout_state({"failures": 0, "locked_until": 0}))

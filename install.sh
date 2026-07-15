@@ -7,7 +7,12 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "== Installing system dependencies via pacman =="
-pacman -S --needed --noconfirm python python-pip python-numpy opencv v4l-utils base-devel
+# python-pam via pacman, not pip -- it's an official Arch package (matches
+# the AUR PKGBUILD's depends=), and installing it via pip instead creates
+# untracked files under site-packages that later collide with pacman's own
+# copy the moment anyone (including the AUR package itself) tries to
+# install python-pam properly. Learned this the hard way.
+pacman -S --needed --noconfirm python python-pip python-numpy opencv python-pam v4l-utils base-devel
 
 echo "== Checking for cv2.face (opencv-contrib) =="
 if ! python -c "import cv2; cv2.face" >/dev/null 2>&1; then
@@ -16,42 +21,23 @@ if ! python -c "import cv2; cv2.face" >/dev/null 2>&1; then
   pip install --break-system-packages opencv-contrib-python
 fi
 
-echo "== Installing python-pam (isolated password verification) =="
-pip install --break-system-packages python-pam
-
-INSTALL_DIR="/usr/lib/facegate"
-echo "== Installing FaceGate to $INSTALL_DIR =="
-# Wipe any previous install first. cp -r into an *existing* directory nests
-# the copy inside it instead of replacing it (facegate/facegate/facegate/...),
-# which silently leaves stale/old code in place on re-installs or updates.
-rm -rf "$INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
-cp -r facegate "$INSTALL_DIR/"
-
-cat > /usr/bin/facegate <<'EOF'
-#!/usr/bin/env python3
-import sys
-sys.path.insert(0, "/usr/lib/facegate")
-from facegate.cli import main
-main()
-EOF
-chmod 755 /usr/bin/facegate
-
-cat > /usr/bin/facegate-auth <<'EOF'
-#!/usr/bin/env python3
-import sys
-sys.path.insert(0, "/usr/lib/facegate")
-from facegate.pam_helper import main
-main()
-EOF
-chmod 755 /usr/bin/facegate-auth
+echo "== Installing Visagate =="
+# pip install . (not a manual copy to /usr/lib + hand-written wrapper
+# scripts) so this produces the EXACT same file layout as the AUR
+# package: proper site-packages install + auto-generated /usr/bin
+# entry-point scripts. Two different layouts for the same software is
+# exactly what caused a real /usr/bin/visagate* file conflict the first
+# time this was tested against the AUR build -- --no-deps because numpy
+# and python-pam are already handled via pacman above, matching how the
+# AUR package resolves them through pacman's depends= rather than pip.
+pip install --break-system-packages --force-reinstall --no-deps .
 
 echo "== Creating log directory =="
-mkdir -p /var/log/facegate
-chmod 1777 /var/log/facegate
+mkdir -p /var/log/visagate
+chmod 1777 /var/log/visagate
 
 echo "== Checking camera device group access =="
-# /dev/video* are typically root:video 0660. facegate-auth runs as root
+# /dev/video* are typically root:video 0660. visagate-auth runs as root
 # under sudo (fine either way), but as your actual logged-in user under
 # kscreenlocker/some greeters -- if that user isn't in the "video" group,
 # it can wire up PAM perfectly and still never be able to open the camera
@@ -77,6 +63,6 @@ else
 fi
 
 echo ""
-echo "Install complete (facegate $(python3 -c "import sys; sys.path.insert(0,'/usr/lib/facegate'); from facegate import __version__; print(__version__)"))."
-echo "Run:  sudo facegate autosetup"
-echo "Then: sudo facegate doctor    (sanity-check camera + PAM wiring)"
+echo "Install complete (visagate $(python3 -c "from visagate import __version__; print(__version__)"))."
+echo "Run:  sudo visagate autosetup"
+echo "Then: sudo visagate doctor    (sanity-check camera + PAM wiring)"

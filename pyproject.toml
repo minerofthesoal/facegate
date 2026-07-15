@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "facegate"
-version = "0.2.3"
+name = "visagate"
+version = "0.2.4"
 description = "Face unlock (RGB+IR) for Logitech webcams via PAM, Howdy-style."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,11 +20,11 @@ dependencies = [
 ]
 
 [project.scripts]
-facegate = "facegate.cli:main"
-facegate-auth = "facegate.pam_helper:main"
+visagate = "visagate.cli:main"
+visagate-auth = "visagate.pam_helper:main"
 
 [tool.setuptools.packages.find]
-include = ["facegate*"]
+include = ["visagate*"]
 
 [tool.setuptools.package-data]
-facegate = ["data/*.xml"]
+visagate = ["data/*.xml"]

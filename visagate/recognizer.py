@@ -2,7 +2,7 @@
 
 Uses OpenCV's LBPH face recognizer (opencv-contrib's cv2.face module) on
 both the RGB and IR streams separately, storing one model file per stream
-per user under /etc/facegate/models. At auth time both streams are
+per user under /etc/visagate/models. At auth time both streams are
 checked and (by default) both must agree, which is a meaningfully higher
 bar than a single RGB camera check since a printed photo or phone screen
 generally will not read correctly on the IR stream.
@@ -44,7 +44,7 @@ def _cascade_path():
     raise RuntimeError(
         "Could not locate haarcascade_frontalface_default.xml anywhere "
         "(checked bundled copy + cv2.data + common system paths). "
-        "Reinstall FaceGate or place the file at "
+        "Reinstall Visagate or place the file at "
         f"{_BUNDLED_CASCADE}"
     )
 
@@ -108,7 +108,7 @@ def _grab_faces(device_path, num_samples, timeout, min_face_size=80, verbose=Tru
         print(
             f"    WARNING: {frames_read} frames read but no face was ever detected. "
             f"Move closer to the camera, improve lighting, or lower "
-            f"recognition.min_face_size in /etc/facegate/config.json (currently {min_face_size})."
+            f"recognition.min_face_size in /etc/visagate/config.json (currently {min_face_size})."
         )
     return faces, raw_samples
 
@@ -169,7 +169,7 @@ def enroll_user(username, rgb_device, ir_device, samples=25, timeout=25, append=
     hf_upload config and done outside of enrollment's critical path.
     """
     if not rgb_device and not ir_device and not extra_cameras:
-        raise RuntimeError("No camera devices configured. Run 'facegate autosetup' first.")
+        raise RuntimeError("No camera devices configured. Run 'visagate autosetup' first.")
 
     cfg = config.load()
     min_face_size = cfg["recognition"].get("min_face_size", 80)
@@ -242,7 +242,7 @@ def enroll_user(username, rgb_device, ir_device, samples=25, timeout=25, append=
             raise RuntimeError(
                 f"Not enough face samples captured from '{cam_id}' ({device}). "
                 "Face that camera directly in good, even lighting and try again, "
-                f"or run 'facegate camera remove {cam_id}' to drop it."
+                f"or run 'visagate camera remove {cam_id}' to drop it."
             )
         path = os.path.join(config.MODEL_DIR, f"{username}_{cam_id}.yml")
         _train_or_update(path, faces, append=append)
@@ -258,7 +258,7 @@ def enroll_user(username, rgb_device, ir_device, samples=25, timeout=25, append=
 
 def _lock_down(path):
     """Root-owned, world-readable (see config.py's v0.2.2 docstring for
-    why): facegate-auth needs to read this when invoked as whatever
+    why): visagate-auth needs to read this when invoked as whatever
     non-root user a PAM service like kscreenlocker runs as, not just when
     running as root under sudo. Model files aren't secrets in the same
     way the disable PIN is."""

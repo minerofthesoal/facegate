@@ -26,7 +26,7 @@ jobs:
       - name: Stamp version ${{ inputs.version }}
         run: |
           sed -i "s/^version = .*/version = \"${{ inputs.version }}\"/" pyproject.toml
-          sed -i "s/^__version__ = .*/__version__ = \"${{ inputs.version }}\"/" facegate/__init__.py
+          sed -i "s/^__version__ = .*/__version__ = \"${{ inputs.version }}\"/" visagate/__init__.py
 
       - name: Build sdist + wheel
         run: |
@@ -55,7 +55,7 @@ jobs:
       - name: Stamp version ${{ inputs.version }}
         run: |
           sed -i "s/^version = .*/version = \"${{ inputs.version }}\"/" pyproject.toml
-          sed -i "s/^__version__ = .*/__version__ = \"${{ inputs.version }}\"/" facegate/__init__.py
+          sed -i "s/^__version__ = .*/__version__ = \"${{ inputs.version }}\"/" visagate/__init__.py
           sed -i "s/^pkgver=.*/pkgver=${{ inputs.version }}/" PKGBUILD
 
       - name: makepkg refuses to run as root -- build as an unprivileged user
@@ -67,7 +67,7 @@ jobs:
         run: sudo -u builder makepkg -f --noconfirm --nodeps
         # --nodeps: runtime deps (opencv, v4l-utils, ...) declared in PKGBUILD
         # aren't installed in this minimal container -- we're only packaging
-        # here, not test-running FaceGate itself.
+        # here, not test-running Visagate itself.
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,7 +86,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ inputs.version }}
-          name: FaceGate v${{ inputs.version }}
+          name: Visagate v${{ inputs.version }}
           generate_release_notes: true
           files: |
             artifacts/python-package/*

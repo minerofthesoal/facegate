@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.2.4 -- renamed to Visagate
+
+**Renamed the whole project from FaceGate to Visagate.** Turns out
+`facegate-git` and `facegate-bin` already exist on the AUR -- a
+completely unrelated, ONNX-based face-recognition tool. The plain
+`facegate` pkgbase name happened to still be unclaimed, but shipping
+under it next to an already-established, similarly-named tool would be
+genuinely confusing, and if anyone ever had that other package installed,
+its `/usr/bin/facegate` binary would collide with ours outright. Renamed
+everything, not just the package name, since binary/path collisions don't
+care what the AUR package itself is called:
+
+- Python package: `facegate` -> `visagate`
+- CLI commands: `facegate`/`facegate-auth` -> `visagate`/`visagate-auth`
+- Paths: `/etc/facegate` -> `/etc/visagate`, `/var/log/facegate` ->
+  `/var/log/visagate`
+- PAM service names: `facegate-verify` -> `visagate-verify`; the marker
+  string PAM lines are matched against is now `visagate-auth`
+- Fish completions/shortcut function updated and brought current (they'd
+  fallen behind -- missing `camera`, `hf-upload`, `kde-passive-unlock`,
+  `doctor`, `log`); the shortcut function itself was renamed from `fg` to
+  `vg` since `fg` shadows the shell's own job-control builtin
+- `PKGBUILD`/`pyproject.toml`/GitHub Actions workflows all updated to match
+
+An existing v0.2.3 install's config, models, and PIN are NOT
+auto-migrated to the new paths -- this is a rename, not an upgrade path,
+since `/etc/facegate` and `/etc/visagate` are different locations. Run
+`sudo visagate autosetup` fresh after installing this version.
+
+**Fixed a real `install.sh` bug found while testing the AUR build:**
+`install.sh` was installing `python-pam` via `pip`, while the AUR
+`PKGBUILD` (correctly) declares it as a pacman dependency -- Arch ships an
+official `python-pam` package. Running both on the same machine meant
+pacman refused to install its own copy over pip's untracked files
+("conflicting files" error). Fixed by having `install.sh` install it via
+pacman too, matching `PKGBUILD`.
+
+**Also unified the two install layouts.** `install.sh` used to manually
+copy the package to `/usr/lib/visagate/` and hand-write wrapper scripts at
+`/usr/bin/visagate`/`/usr/bin/visagate-auth`, while the AUR package
+installs properly into site-packages with auto-generated entry-point
+scripts -- two different layouts for the same software, which is exactly
+what caused the `/usr/bin/*` file conflict hit while testing the AUR
+build. `install.sh` now just runs `pip install --no-deps .`, producing
+the identical layout the AUR package does, so a machine that's used both
+installation methods can no longer collide with itself.
+
 ## v0.2.3
 
 **Root cause found and fixed: face unlock silently never worked outside `sudo`**
@@ -8,49 +55,49 @@ This is the actual explanation for "the KDE lock screen doesn't even try"
 and "it did not work" -- confirmed directly from journalctl evidence:
 `pam_exec(kde:auth)` and `pam_exec(kde-fingerprint:auth)` were both being
 invoked correctly (kde-passive-unlock *is* proactively polled -- the
-earlier fprintd-gating caution wasn't the blocker), but `facegate-auth`
-failed instantly every time with **zero entries in FaceGate's own log**,
+earlier fprintd-gating caution wasn't the blocker), but `visagate-auth`
+failed instantly every time with **zero entries in Visagate's own log**,
 even though `sudo` attempts logged perfectly.
 
-Root cause: `facegate-auth` runs with whatever privileges the *calling*
+Root cause: `visagate-auth` runs with whatever privileges the *calling*
 PAM service has. `sudo` stays fully root through its whole auth phase, so
 it inherits root and can read the old root-only (0700/0600) config and
 model files fine. `kscreenlocker_greet`, on the other hand, runs as your
 actual logged-in user -- it's just re-confirming you're still you, no
-privilege escalation involved -- so `facegate-auth` inherited that
+privilege escalation involved -- so `visagate-auth` inherited that
 regular user's privileges instead, hit a `PermissionError` opening
-`/etc/facegate` before `main()` ever reached a single logging call, and
-crashed with exit code 1 and nothing written anywhere FaceGate controls.
+`/etc/visagate` before `main()` ever reached a single logging call, and
+crashed with exit code 1 and nothing written anywhere Visagate controls.
 
 Fixed by reworking the permission model rather than papering over it:
-- `/etc/facegate` and `/etc/facegate/models` are now `0755` (world-
+- `/etc/visagate` and `/etc/visagate/models` are now `0755` (world-
   traversable), `config.json` and per-user model files are now `0644`
   (world-readable). None of that data is a secret -- camera device
   paths, thresholds, and LBPH texture models aren't passwords or photos.
   Only root can write them.
 - The one genuinely sensitive value, the disable/uninstall PIN hash,
-  now lives in a **separate** file, `/etc/facegate/pin.json`, which
+  now lives in a **separate** file, `/etc/visagate/pin.json`, which
   stays strictly root-only (`0600`). `pam_helper.py` never reads it --
-  only the `facegate` CLI commands that already require root do. An
+  only the `visagate` CLI commands that already require root do. An
   existing PIN from an older install is migrated over automatically
   (and actually stripped out of the now-world-readable config.json on
   disk, not just in memory -- caught and fixed this exact ordering bug
   in testing before it shipped).
-- `/var/log/facegate` and `facegate.log` are now world-writable (sticky
+- `/var/log/visagate` and `visagate.log` are now world-writable (sticky
   bit, `1777`/`0666`) for the same reason -- a non-root invocation
   couldn't write to the old `0750`/`0640` log either, so even after the
   config fix, lock-screen attempts would have kept showing up in
-  `journalctl -t facegate` (syslog, not filesystem-permission-dependent)
-  but never in `facegate log` (the file-backed view), which is exactly
+  `journalctl -t visagate` (syslog, not filesystem-permission-dependent)
+  but never in `visagate log` (the file-backed view), which is exactly
   the asymmetry that made this diagnosable in the first place.
 - `install.sh` now also adds the invoking user to the `video` group if
   they aren't already a member (needed to even *open* `/dev/videoN` as
   a non-root PAM context) and says plainly that this needs a fresh login
   session to take effect -- group membership doesn't refresh for an
   already-running desktop session.
-- `facegate doctor` now checks all of the above directly (permission
+- `visagate doctor` now checks all of the above directly (permission
   bits on config/models/log, video group membership) instead of only
-  being discoverable by cross-referencing `facegate log` against
+  being discoverable by cross-referencing `visagate log` against
   `journalctl` by hand.
 
 Trade-off worth knowing about, stated plainly rather than buried: any
@@ -63,12 +110,12 @@ at all outside `sudo`.
 ## v0.2.2
 
 **Plasma 6.7.2 / kde-passive-unlock fixes**
-- `facegate doctor` had a bug: its kde-fingerprint check only looked at
+- `visagate doctor` had a bug: its kde-fingerprint check only looked at
   `/etc/pam.d/kde-fingerprint` and never checked the vendor default at
   `/usr/lib/pam.d/kde-fingerprint`, so it reported "not present on this
   system" even though Arch's `kscreenlocker` package ships that vendor
   file (confirmed directly against the package's file list/PKGBUILD).
-  `facegate kde-passive-unlock on` itself already checked the vendor
+  `visagate kde-passive-unlock on` itself already checked the vendor
   path correctly -- only doctor's separate status line was wrong. Fixed;
   doctor now reports three distinct states: wired, vendor-default-exists-
   but-not-yet-enabled, or genuinely not shipped on this system.
@@ -97,21 +144,21 @@ at all outside `sudo`.
   it (pressing Enter, even on an empty password field) -- it does not
   proactively scan the instant the lock screen appears, unlike a
   fingerprint reader. This was working as configured, just not as
-  expected; `facegate enable`/`doctor` now print this caveat explicitly
+  expected; `visagate enable`/`doctor` now print this caveat explicitly
   wherever it applies instead of leaving it to be discovered the hard way.
-- Added `facegate kde-passive-unlock on|off`: **experimental**, opt-in
+- Added `visagate kde-passive-unlock on|off`: **experimental**, opt-in
   only, never installed by default. Plasma 6's kscreenlocker has a
   "multiauth" feature that proactively polls a dedicated PAM service
   (`kde-fingerprint`) for fingerprint-style readers, independent of the
-  password field. Wiring FaceGate into that slot instead might get a
+  password field. Wiring Visagate into that slot instead might get a
   genuinely proactive, no-Enter scan -- but whether kscreenlocker polls
   it at all without a real fingerprint reader registered is unverified,
   and mixing non-password auth into the lock screen can interact oddly
   with KWallet's automatic-unlock-on-login assumption. Command prints all
   of this before asking for confirmation.
-- `facegate doctor` now distinguishes "PAM file doesn't exist and never
+- `visagate doctor` now distinguishes "PAM file doesn't exist and never
   will on this system" from "the vendor default exists but you haven't
-  run `facegate enable` yet" instead of reporting both as a generic skip,
+  run `visagate enable` yet" instead of reporting both as a generic skip,
   plus reports the experimental kde-fingerprint wiring status separately.
 
 **Declined: obfuscating the PAM auth code on `main`**
@@ -125,19 +172,19 @@ at all outside `sudo`.
   plain, readable source; the side-branch pipeline is untouched.
 
 **Continued/incremental training**
-- Already present as of v0.2.0 and unchanged here: `facegate enroll --append`
+- Already present as of v0.2.0 and unchanged here: `visagate enroll --append`
   adds new samples to an existing model via LBPH's `update()` instead of
   replacing it, so you can teach a second look (glasses, lighting, a new
   camera) without losing the original enrollment.
 
 **Multi-camera support**
 - You can now enroll and unlock with more than the primary RGB+IR pair.
-  `facegate camera add` probes for additional Logitech devices (e.g. a
+  `visagate camera add` probes for additional Logitech devices (e.g. a
   second webcam with no IR sensor, like a C930), lets you pick one
   interactively or pass `--device` directly, and stores it under a new
   `extra_cameras` config list. Each extra camera gets its own LBPH model
   file and confidence threshold.
-- `facegate camera list` / `facegate camera remove <id>` manage them.
+- `visagate camera list` / `visagate camera remove <id>` manage them.
 - Recognition (`recognizer.authenticate`) was generalized from a
   hardcoded rgb/ir pair to loop over an arbitrary number of streams. The
   combining rule is unchanged in spirit and verified behavior-identical
@@ -145,20 +192,20 @@ at all outside `sudo`.
   all is excluded (camera/detection problem, not evidence of spoofing);
   of the streams that DID detect a face, all must match by default
   (`recognition.require_both`), or any one of them if that's set false.
-- `facegate enroll [--append]` trains/updates every configured stream,
+- `visagate enroll [--append]` trains/updates every configured stream,
   primary and extra, in one pass.
 
 **Optional Hugging Face backup (off by default)**
-- New `facegate hf-upload on|off`. When enabled, and only for a given
+- New `visagate hf-upload on|off`. When enabled, and only for a given
   username's very first successful enrollment (never for later
   `--append` sessions), enrollment images from every configured stream
   are saved with everything outside the detected face blurred out, then
   uploaded to a Hugging Face dataset repo (default
-  `ray0rf1re/faces`) via `huggingface_hub`. FaceGate never stores or
+  `ray0rf1re/faces`) via `huggingface_hub`. Visagate never stores or
   requests a token itself -- it relies on `huggingface-cli login`
   already being done, and the feature no-ops with instructions if
   `huggingface_hub` isn't installed (it's optional, not installed by
-  `install.sh`). `facegate autosetup` offers this as an explicit opt-in
+  `install.sh`). `visagate autosetup` offers this as an explicit opt-in
   prompt, defaulting to no.
 - This is a real privacy tradeoff, not just a toggle -- read the prompt.
   Blurring the background reduces incidental exposure, not the fact that
@@ -198,20 +245,20 @@ at all outside `sudo`.
 - New lockout/cooldown: after `lockout.max_failed_attempts` (default 5)
   consecutive failures, face auth is skipped for `lockout.cooldown_seconds`
   (default 300s) and PAM falls straight to password. State lives on
-  tmpfs (`/run/facegate`) and resets on reboot. `sudo facegate enable`
+  tmpfs (`/run/visagate`) and resets on reboot. `sudo visagate enable`
   clears any active cooldown.
 
 **Logging**
-- New `facegate/logging_setup.py`: auth attempts are now written to
-  `/var/log/facegate/facegate.log` (rotating, 5x2MB) in addition to
-  syslog, and `facegate log` shows recent entries directly without
+- New `visagate/logging_setup.py`: auth attempts are now written to
+  `/var/log/visagate/visagate.log` (rotating, 5x2MB) in addition to
+  syslog, and `visagate log` shows recent entries directly without
   needing `journalctl` syntax.
 
 **New commands**
-- `facegate doctor` -- one-shot health check: camera detected, RGB/IR
+- `visagate doctor` -- one-shot health check: camera detected, RGB/IR
   configured, models enrolled, PAM wiring, lockout state, log dir.
-- `facegate log [-n N]` -- show recent auth attempts.
-- `facegate --version`.
+- `visagate log [-n N]` -- show recent auth attempts.
+- `visagate --version`.
 - `autosetup`/`enable` now print the detected display manager.
 
 **Known limitation, stated honestly:** the lock-screen/login-screen PAM
@@ -219,6 +266,6 @@ wiring above targets the PAM service names these greeters *should* use;
 whether `pam_exec` actually fires cleanly from a given greeter still
 depends on your specific Plasma/SDDM version and distro packaging, and
 isn't something that can be verified without testing on the target
-machine. Run `sudo facegate doctor` after `enable`, then test an actual
-lock/restart cycle and check `sudo facegate log` / `sudo journalctl -t
-facegate -e` if it doesn't fire.
+machine. Run `sudo visagate doctor` after `enable`, then test an actual
+lock/restart cycle and check `sudo visagate log` / `sudo journalctl -t
+visagate -e` if it doesn't fire.

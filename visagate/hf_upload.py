@@ -3,9 +3,9 @@ Hugging Face dataset repo.
 
 Scope, matching what was asked for:
  - Disabled by default; only ever turned on via an explicit opt-in prompt
-   during `facegate autosetup` (or later with `facegate hf-upload on`).
+   during `visagate autosetup` (or later with `visagate hf-upload on`).
  - Only ever uploads images from the very first successful enrollment for
-   a given username. `facegate enroll` / `facegate enroll --append`
+   a given username. `visagate enroll` / `visagate enroll --append`
    sessions after that never upload anything, even if left enabled --
    config.py tracks this per-user in hf_upload.uploaded_users.
  - Every uploaded image has everything outside the detected face bounding
@@ -13,7 +13,7 @@ Scope, matching what was asked for:
    still uploads a real photo of your face to a remote service you don't
    control the infrastructure of. Think about that before turning it on,
    especially if the target repo is public.
- - FaceGate never stores or asks for a Hugging Face token. It relies on
+ - Visagate never stores or asks for a Hugging Face token. It relies on
    you already being logged in (`huggingface-cli login`) and shells out
    to the `huggingface_hub` library's normal token discovery.
 """
@@ -66,7 +66,7 @@ def save_and_upload(username, stream_samples, repo_id=DEFAULT_REPO_ID):
     api = HfApi()
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     uploaded = []
-    with tempfile.TemporaryDirectory(prefix="facegate-hf-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="visagate-hf-") as tmp:
         for stream_id, samples in stream_samples.items():
             for i, (frame, bbox) in enumerate(samples):
                 blurred = blur_background(frame, bbox)
