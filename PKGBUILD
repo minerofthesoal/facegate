@@ -1,4 +1,4 @@
-# Maintainer: Ray0rf1re
+# Maintainer: Ray0rf1re mason@mcgugan.org
 pkgname=visagate
 pkgver=0.2.4
 pkgrel=1
